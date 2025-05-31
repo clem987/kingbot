@@ -6,11 +6,9 @@ import datetime
 from ta.momentum import RSIIndicator
 from ta.trend import MACD
 import requests
-
-# === Configuration ===
-
 import os
 
+# === Configuration via variables d'environnement ===
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -29,11 +27,12 @@ exchange = ccxt.binance({
 
 positions = {}
 last_info_time = 0
+total_profit = 0
 
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
+        data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
         requests.post(url, data=data)
     except Exception as e:
         print("Erreur Telegram :", e)
@@ -75,11 +74,11 @@ def send_status():
             msg += f" | 🟢 Position ouverte | PnL latent : {pnl:.2f}$"
         else:
             msg += " | ⚪ Aucune position"
-    msg += "\n\n👑 Garde le cap, The King surveille les marchés !"
+    msg += f"\n\n📈 Profit total : {total_profit:.2f} $\n👑 Garde le cap, The King surveille les marchés !"
     send_telegram(msg)
 
 def run():
-    global positions, last_info_time
+    global positions, last_info_time, total_profit
     send_telegram("🚀 KINGBOT est lancé. En route vers les gains.")
     while True:
         for symbol in SYMBOLS:
@@ -89,23 +88,33 @@ def run():
                 price = df.iloc[-1]['close']
 
                 if symbol not in positions:
+                    cooldown_until = positions.get(symbol, {}).get('cooldown_until', datetime.datetime.min)
+                    if datetime.datetime.now() < cooldown_until:
+                        continue
+
                     if should_buy(df):
                         usdc_balance = exchange.fetch_balance()['USDC']['free']
                         amount = round((CAPITAL_USDC / len(SYMBOLS)) / price, 5)
-                        order = exchange.create_market_buy_order(symbol, amount)
-                        positions[symbol] = {
-                            'entry_price': price,
-                            'amount': amount,
-                            'timestamp': datetime.datetime.now()
-                        }
-                        msg = f"📈 Achat {symbol} à {price:.2f}$\n🎯 Montant : {amount} | 💰 Solde restant : {usdc_balance:.2f}$"
-                        send_telegram(msg)
+
+                        if usdc_balance >= amount * price:
+                            order = exchange.create_market_buy_order(symbol, amount)
+                            fee = order['fee']['cost'] if 'fee' in order and order['fee'] else 0
+                            positions[symbol] = {
+                                'entry_price': price,
+                                'amount': amount,
+                                'timestamp': datetime.datetime.now(),
+                                'cooldown_until': datetime.datetime.now() + datetime.timedelta(minutes=10)
+                            }
+                            msg = f"📈 Achat {symbol} à {price:.2f}$\n🎯 Montant : {amount} | 💰 Solde restant : {usdc_balance:.2f}$"
+                            send_telegram(msg)
 
                 else:
                     position = positions[symbol]
                     if should_sell(df, position['entry_price'], price):
                         order = exchange.create_market_sell_order(symbol, position['amount'])
-                        profit = (price - position['entry_price']) * position['amount']
+                        fee = order['fee']['cost'] if 'fee' in order and order['fee'] else 0
+                        profit = (price - position['entry_price']) * position['amount'] - fee
+                        total_profit += profit
                         send_telegram(f"📉 Vente {symbol} à {price:.2f}$\n💸 Profit : {profit:.2f} $")
                         del positions[symbol]
 
