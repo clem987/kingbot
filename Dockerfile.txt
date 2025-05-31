@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copier les fichiers
+COPY kingbot.py .
+COPY config.json .
+
+# Installer les dépendances
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+CMD ["python", "kingbot.py"]
